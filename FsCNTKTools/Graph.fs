@@ -75,32 +75,74 @@ module Graph =
 
   module grph = 
     open Microsoft.Msagl.Drawing 
+
+    let edgeLabel (v:Variable) = 
+      if v.IsConstant then
+        ""
+      else
+        sprintf "%s\r\n%A" v.Uid  (v.Shape.Dimensions |> Seq.toList)
+
+    let nodeLabel = function
+      | Vf f -> f.OpName
+      | Vv v -> 
+        let n = 
+          if String.IsNullOrWhiteSpace(v.Name) |> not then v.Name
+          elif v.IsInput then "Input"
+          elif v.IsOutput then "Output"
+          elif v.IsParameter then "Parameter"
+          elif v.IsParameter then "Placeholder"
+          elif v.IsConstant then 
+            let cv = v.GetValue()
+            let cv = Value.Create(v.Shape,[cv],DeviceDescriptor.CPUDevice)
+            let cval = cv.GetDenseData<float32>(v).[0].[0]
+            string cval
+          else ""
+        sprintf "%s\r\n%A" n (v.Shape.Dimensions |> Seq.toList)
+
     let makeGraph(vertices,edges) =
       let g = new Microsoft.Msagl.Drawing.Graph()
       let drawingNodes = vertices |> List.map (uid>>g.AddNode) 
       drawingNodes 
       |> List.zip vertices 
       |> List.iter (fun (v,n)->
-        let a = new NodeAttr()
+        n.LabelText <- nodeLabel v
+        n.Attr.LabelMargin <- 5
         match v with 
         | Vv vr -> 
-          n.Attr.FillColor <- Color.Azure
-          if vr.IsInput then n.Attr.Shape <- Shape.Ellipse
-          elif vr.IsOutput then n.Attr.Shape <- Shape.Ellipse; n.Attr.LineWidth <- 2.0
-          elif vr.IsConstant then n.Attr.Shape <- Shape.Mdiamond
-        | Vf fn -> n.Attr.FillColor <- Color.Bisque
+          if vr.IsInput then 
+            n.Attr.Shape <- Shape.Ellipse
+            n.Attr.FillColor <- Color.Azure
+          elif vr.IsOutput then 
+            n.Attr.Shape <- Shape.Ellipse
+            n.Attr.FillColor <- Color.LavenderBlush
+            n.Attr.LineWidth <- 2.0
+          elif vr.IsConstant then 
+            n.Attr.Shape <- Shape.Mdiamond
+            n.Attr.FillColor <- Color.Cornsilk
+        | Vf fn -> 
+          n.Attr.FillColor <- Color.Bisque
+          if fn.IsBlock then n.Attr.LineWidth <- 3.0
       )
-      (drawingNodes,vertices) ||> List.zip |> List.iter (fun (n,v) -> let l = name v in if l<>"" then n.LabelText <- name v)
       let drawingEdges = edges |> Seq.map(fun e -> let ed = g.AddEdge(e.From,e.To) in ed.UserData <- e.Var; ed) |> Seq.toList
+      (drawingEdges,edges) ||> List.zip |> List.iter (fun (e,ev) -> 
+        //e.Label <- new Label()
+        e.LabelText <- edgeLabel ev.Var
+        //e.Label.FontSize <- 8.0
+        //e.Label.Text <- edgeLabel ev.Var
+      )
       g
   
   let visualize (nodes,edges) =
     let gv = new Microsoft.Msagl.GraphViewerGdi.GViewer()
-    gv.Graph <- grph.makeGraph(nodes,edges)
+    let g = grph.makeGraph(nodes,edges)
+    g.Edges |> Seq.iter (fun e->  e.Label.FontSize <- 8.0)
+    gv.Graph <- g
     let f = new System.Windows.Forms.Form()
     f.SuspendLayout()
     gv.Dock <- DockStyle.Fill
     f.Controls.Add(gv)
+    gv.Invalidate()
+    gv.Update()
     f.ResumeLayout()
     f.Show()
   

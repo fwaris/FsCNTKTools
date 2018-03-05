@@ -21,5 +21,6 @@ let testModelLoad() =
   // testModelLoad()
 
 
-let testGraph() = Function.Load(test_model,device) |> FSCNTK.Tools.Graph.showGraph
-// testGraph()
+//let testGraph() = Function.Load(test_model,device) |> FSCNTK.Tools.Graph.showGraph
+let testGraph() = Function.Load(@"D:\repodata\fscntk\m_fs_untrained.bin",device) |> FSCNTK.Tools.Graph.showGraph
+testGraph()
