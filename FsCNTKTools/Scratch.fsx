@@ -3,6 +3,10 @@
 open CNTK
 open System
 open System.Windows.Forms
+open FSCNTK.Tools.Graph
+open System.Collections.Generic
+open FSCNTK.Tools.Graph.grph
+open System.Windows.Controls
 
 type C = CNTK.CNTKLib
 
@@ -12,102 +16,227 @@ let device = DeviceDescriptor.GPUDevice(0)
 
 let model = Function.Load(test_model,device)
 
-type Vertex = Vf of Function | Vv of Variable
+let inline mCollect m k v = 
+  let vs = match m |> Map.tryFind k with Some ls -> v::ls | None -> [v]
+  Map.add k vs m
 
-type Edge = string*string //from->to
+let inline mRemove m k v = 
+  let vs = match m |> Map.tryFind k with Some ls -> ls |> List.filter (fun v'-> v'<>v) | None -> []
+  Map.add k vs m
 
-let toVertex (n:obj) = 
-  match n with 
-  | :? Function as f -> Vf f 
-  | :? Variable as v -> Vv v 
-  | _ -> failwith "unknown node"
+//determine 'signature' of a variable for matching purposes
+let varSignature (v:Variable) =
+  let dims = v.Shape.Dimensions |> Seq.toList
+  let axes = seq { for a in v.DynamicAxes do 
+                      if a.IsDynamic then yield 'd'
+                      if a.IsOrdered then yield 'o'
+                      if a.IsStatic then yield 't'
+                      if a.IsBatchAxis() then yield 'b'
+                      if a.IsSequenceAxis() then yield 's'
+                  }
+                  |> set
+  dims,axes
 
-let uid = function Vf n -> n.Uid | Vv n ->n.Uid
-let name = function Vf n -> n.Name | Vv n->n.Name
-
-let isVisited id = Set.contains id
-
-let rec traverse (vertices,edges,visits) (n:obj) = 
-  let vrtx = toVertex n
-  let vertexId = uid vrtx
-  if isVisited vertexId visits then
-    (vertices,edges,visits)
+//try to match a variable 
+//to the closest one of the candidate variables
+let matchVars protoVar cndtVars =
+  if List.length cndtVars = 0 then None
+  elif List.length cndtVars = 1 then Some cndtVars.Head
   else
-    let visits = visits.Add vertexId
-    match vrtx with
-    | Vf f -> 
-      let acc = (vrtx::vertices,edges,visits)
-      let acc = (acc,f.Arguments) ||> Seq.fold traverse 
-      let acc = (acc,[f.RootFunction]) ||> Seq.fold traverse
-      let acc = (acc,f.Inputs) ||> Seq.fold traverse
-      let (vertices,edges,vists) = (acc,f.Outputs) ||> Seq.fold traverse
-      let edges =  (edges,f.Inputs) ||> Seq.fold (fun es n -> Set.add ( n |> toVertex |> uid ,vertexId) es)
-      let edges = (edges,f.Outputs) ||> Seq.fold (fun es n -> Set.add (vertexId,  n |> toVertex |> uid) es)
-      (vertices,edges,vists)
-    | Vv v -> 
-      let acc = (vrtx::vertices,edges,visits)
-      let acc = if v.Owner <> null then traverse acc v.Owner else acc
-      acc
+    let srcDims,srcAxes = varSignature protoVar                                     //variable signature
+    let inpSigs = cndtVars |> List.map (fun v-> varSignature v, v)                  //candidate variable signatures
+    let sameDims =  inpSigs |> List.filter (fun ((dims,axs),v) -> dims = srcDims)   //candidate with same dimensions as variable
+    if sameDims.Length = 1 then
+      let (_,v) = sameDims.Head
+      Some v                                                                       //only 1 match so that should be it
+    else
+      let (_,v) = inpSigs |> List.maxBy (fun ((dims,axs),v)  -> (Set.intersect srcAxes axs) |> Set.count)
+      Some v                                                                       //pick the one with the closes axes signature
 
-let computationalGraph (f:Function) = 
-  let (vx,es,vs) = traverse ([],Set.empty,Set.empty) f.RootFunction
-  let es = Set.union es (f.Outputs |> Seq.map (fun v -> v.Owner.Uid,v.Uid) |> set)
-  let outputs = vx |> List.choose (function Vv v -> (if v.IsOutput then Some v else None) | _ -> None) 
-  let outM = outputs |> List.map (fun v->v.Uid,v) |> Map.ofList
-  let outEges = (Map.empty,es) ||> Seq.fold (fun m (f,t) -> 
-    let v = match m |> Map.tryFind f with Some ls -> t::ls | None -> [t]
-    m |> Map.add f v)
-  let collapsedEdges,removeNodes,keepNodes = 
-    (([],[],[]),es) 
-    ||> Seq.fold (fun (edges,rems,keeps) (vfrm,vto) -> 
-        match outM |> Map.tryFind vto with 
-        | Some v ->
-            let toNodes = match outEges |> Map.tryFind v.Uid with Some ls -> ls | None -> []
-            if List.isEmpty toNodes then
-              ((vfrm,vto)::edges,rems,keeps)
-            else
-              let newEdges = toNodes |> List.map (fun n -> vfrm,n)
-              (newEdges @ edges, v.Uid::rems,keeps)
-        | None ->
-          match outM |> Map.tryFind vfrm with
-          | Some v -> 
-            let toNodes = match outEges |> Map.tryFind v.Uid with Some ls -> ls | None -> []
-            if List.isEmpty toNodes then
-              (edges,rems,v.Uid::keeps)
-            else
-              (edges,rems,keeps)
-          | None ->  [vfrm,vto] @ edges, rems, keeps)
-  let removeSet = set removeNodes
-  let keepSet = set keepNodes
-  let removeSet = Set.difference removeSet keepSet
-  let vx' = vx |> List.filter (uid>>removeSet.Contains>>not)
-  let es' = collapsedEdges
-  vx',es'
+let remapEdge 
+  (phMap:IDictionary<Variable,Function>) 
+  (linkMap:IDictionary<Variable,Variable>)
+  (edge:Edge)
+  = 
+  let ph = linkMap.[edge.Var]
+  let targetFunction = phMap.[ph]
+  {edge with To=targetFunction.Uid}
 
-let (vx,es) = computationalGraph model
+let allVertices ((vx,es),subgraphs) = vx @ (List.collect (fun v -> v.Vertices) subgraphs) 
+let allEdges ((vx,es),subgraphs) = es @ (List.collect (fun v -> v.Edges) subgraphs)      //all edges
+let subgraphEdges = List.collect (fun sg -> sg.Edges |> List.map (fun e->sg.Container,e))
+let subgraphVertices = List.collect(fun sg -> sg.Vertices |> List.map (fun v->sg.Container,v))
+
+//placeholders for each block function
+let blockPlaceHolders subgraphs =
+  let vertices = subgraphs |>  subgraphVertices |> List.map snd
+  let phBlockMap = 
+    subgraphs
+    |> subgraphEdges
+    |> List.choose (fun (c,e) -> if e.Var.IsPlaceholder then Some (e.Var,c) else None)
+    |> dict
+  vertices 
+  |> List.map (function 
+    | Vf f ->
+      f.Inputs 
+      |> Seq.toList 
+      |> List.choose (fun v -> match phBlockMap.TryGetValue v with | true,id-> Some(id,v,f) | _ -> None)
+    | _ -> [])
+    |> List.filter (List.isEmpty >> not)
+    |> List.collect (fun x->x)
+
+let relinkBlockInputs (((vx,es),subgraphs) as graphs) =
+  ////let ((vx,es),subgraphs) = computationGraphs model
+  //let vertices = allVertices graphs
+  let edges = allEdges graphs
+  let blkPhs = blockPlaceHolders subgraphs
+
+  let blockInputs =  //inputs coming into each block function
+    let blockIdSet = blkPhs |> List.map (fun (c,_,_)->c) |> set
+    edges |> List.filter (fun e -> blockIdSet.Contains e.To && not e.Var.IsParameter )
+  
+  let blckInpMap = blockInputs |> List.groupBy (fun e->e.To) |> Map.ofList
+
+  let (links,_) =                                     //placeholders matched to block inputs
+    (([],blckInpMap),blkPhs) 
+    ||> List.fold (fun (acc,inpMap) (blockId,ph,_) ->
+      inpMap 
+      |> Map.tryFind blockId
+      |> Option.map (List.map (fun e->e.Var))
+      |> Option.bind (matchVars ph)
+      |> Option.map (fun edgeVar ->   //matched input
+        (edgeVar,ph)::acc,
+        let es' = inpMap.[blockId] |> List.filter (fun e->e.Var<>edgeVar) 
+        inpMap |> Map.add blockId es')
+      |> Option.defaultValue (acc,inpMap))
+
+  //retarget block input edges to owners of placeholders
+  //the 'to' end should be the function which 'owns' the placeholder
+  //remove placeholders that were matched
+  let phMap = blkPhs |> List.map (fun (c,v,f) -> v,f) |> dict
+  let linkMap = dict links
+  let blockInputs' = blockInputs |> List.map (remapEdge phMap linkMap)
+  let toRemoveSet = blockInputs |> List.map (fun {From=vFrm;To=vTo} -> vFrm,vTo) |> set
+  let es = es |> List.filter (fun {From=vFrm;To=vTo} -> toRemoveSet.Contains (vFrm,vTo) |> not)
+  let es = es @ blockInputs'
+  let subgraps = subgraphs |> List.map (fun sg -> {sg with Edges=sg.Edges |> List.filter (fun e->phMap.ContainsKey e.Var |> not)})
+  ((vx,es),subgraphs)
+
+
+let relinkBlockOutputs (((vx,es),subgraphs) as graphs) = 
+  let rootOutMap = 
+    vx 
+    |> List.collect (function 
+      | Vf f when f.IsBlock -> 
+        let root = f.BlockRoot()
+        root.Outputs 
+          |> Seq.map (fun outV -> f.Uid,outV,root) 
+          |> Seq.toList
+      | _ -> []) 
+    |> List.groupBy (fun (id,_,_) -> id)
+    |> Map.ofList
+
+  let blkOutEdges = es |> List.choose (function e when rootOutMap.ContainsKey e.From -> Some(e.From,e) | _ -> None)
+
+  let uniqOutEs = //outputs may go to multiple places so pick unique ones for matching
+    blkOutEdges 
+    |> List.groupBy fst 
+    |> List.map (fun (k,vs) -> 
+      k,
+      vs 
+      |> List.map (fun (_,e) -> e.Var) 
+      |> HashSet 
+      |> Seq.toList)
+    |> List.collect (fun (k,vs)->vs |> List.map (fun v -> k,v))
+
+  let (links,_) =                                     //block outputs mapped to root function outputs
+    let accMap = rootOutMap |> Map.map (fun _ xs -> xs |> List.map (fun (_,v,_) -> v))
+    (([],accMap),uniqOutEs) 
+    ||> List.fold (fun (acc,accMap) (blockId,edgeVar) ->
+      accMap 
+      |> Map.tryFind blockId
+      |> Option.bind (matchVars edgeVar)
+      |> Option.map (fun outVar ->        //matched input
+        (edgeVar,outVar)::acc,
+        (mRemove accMap blockId outVar))  
+      |> Option.defaultValue (acc,accMap))
+   
+  let blkRoots = rootOutMap |> Map.toSeq |> Seq.collect (fun (c,xs) -> xs |> List.map(fun (_,v,f) -> v,f)) |> dict
+
+  let linkMap = dict links
+
+  let blkOutEdges' = blkOutEdges |> List.map snd |> List.map (remapEdge blkRoots linkMap)
+  let toRemoveSet = blkOutEdges |> List.map (fun (_,{From=vFrm;To=vTo}) -> vFrm,vTo) |> set
+  let es = es |> List.filter (fun {From=vFrm;To=vTo} -> toRemoveSet.Contains (vFrm,vTo) |> not)
+  let es = es @ blkOutEdges'
+  let subgraps = subgraphs |> List.map (fun sg -> {sg with Edges=sg.Edges |> List.filter (fun e->blkRoots.ContainsKey e.Var |> not)})
+  ((vx,es),subgraphs)
+  
+//remove parameter links to block subgraphs (outer edges)
+//(keep parameter links to nodes inside the subgraphs)
+let removeBlockParameterLinks (((vx,es),subgraphs) as graphs) =
+  let fromSet =                                          //'from' nodes of subgraph parameter links
+    subgraphs 
+    |> subgraphEdges 
+    |> List.filter (fun (_,e)->e.Var.IsParameter) 
+    |> List.map (fun (_,e) -> e.From)
+    |> set
+  let keepEdges = es |> List.filter (fun e -> fromSet.Contains e.From |> not)
+  (vx,keepEdges),subgraphs
+ 
+
+  //visualize ((vx,es),subgraphs)
+
+let (((vx,es),subgraphs) as graphs) = 
+  computationGraphs true model 
+  |> removeBlockParameterLinks 
+  //|> relinkBlockOutputs 
+  |> relinkBlockInputs
+
+
+
+visualize graphs
+
 
 module grph = 
   open Microsoft.Msagl.Drawing 
-  let makeGraph(vertices,edges) =
+
+  let makeGraph() =
     let g = new Microsoft.Msagl.Drawing.Graph()
-    let drawingNodes = vertices |> List.map (uid>>g.AddNode) 
-    drawingNodes 
-    |> List.zip vertices 
-    |> List.iter (fun (v,n)->
-      let a = new NodeAttr()
-      match v with 
-      | Vv _ -> n.Attr.FillColor <- Color.Azure
-      | Vf _ -> n.Attr.FillColor <- Color.Bisque
-    )
-    (drawingNodes,vertices) ||> List.zip |> List.iter (fun (n,v) -> let l = name v in if l<>"" then n.LabelText <- name v)
-    let drawingEdges = edges |> Seq.map(fun (vfrm,vto) -> g.AddEdge(vfrm,vto)) |> Seq.toList
+    g.AddEdge("47","58") |> ignore
+    g.AddEdge("70","71") |> ignore
+
+    let sg1 = new Subgraph("sg1")
+    g.RootSubgraph <- sg1
+    sg1.AddNode(g.FindNode("47"))
+    sg1.AddNode(g.FindNode("58"))
+
+    let sg2 = new Subgraph("sg2")
+    sg2.DiameterOfOpenCollapseButton <- 20.
+    sg2.CollapseButtonColorActive <- Color.Blue
+    sg2.CollapseButtonColorInactive <- Color.Red
+    sg2.AddNode(g.FindNode("70"))
+    sg2.AddNode(g.FindNode("71"))
+    sg1.AddSubgraph(sg2)
+    g.AddEdge("58",sg2.Id) |> ignore
+    g.Attr.LayerDirection <- LayerDirection.LR
     g
+
   
-let gv = new Microsoft.Msagl.GraphViewerGdi.GViewer()
-gv.Graph <- grph.makeGraph(vx,es)
-let f = new System.Windows.Forms.Form()
-f.SuspendLayout()
-gv.Dock <- DockStyle.Fill
-f.Controls.Add(gv)
-f.ResumeLayout()
-f.Show()
+open Microsoft.Msagl.WpfGraphControl
+#r "PresentationCore"
+#r "PresentationFramework"
+#r "WindowsBase"
+open System
+open System.Windows
+open System.Windows.Controls
+
+let testWpf() =
+  let gv = new GraphViewer()
+  let window = new Window(Title = "Simple Test", Width = 800., Height = 600.)
+  let d = new DockPanel()
+  window.Content <- d
+  gv.BindToPanel(d)
+  window.Show()
+
+  gv.Graph <- grph.makeGraph()

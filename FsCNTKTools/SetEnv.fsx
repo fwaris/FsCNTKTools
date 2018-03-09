@@ -29,10 +29,17 @@ dependencies
 
 #r @"..\packages\CNTK.GPU.2.4.0\lib\net45\x64\Cntk.Core.Managed-2.4.dll"
 
+//#r @"D:\Repos\automatic-graph-layout\GraphLayout\tools\WpfGraphControl\bin\Debug\Microsoft.Msagl.dll"
 #r @"..\packages\Microsoft.Msagl.1.0.2\lib\net40\Microsoft.Msagl.dll"
 
 #r @"..\packages\Microsoft.Msagl.Drawing.1.0.2\lib\net40\Microsoft.Msagl.Drawing.dll"
+//#r @"D:\Repos\automatic-graph-layout\GraphLayout\tools\WpfGraphControl\bin\Debug\Microsoft.Msagl.Drawing.dll"
 
 #r @"..\packages\Microsoft.Msagl.GraphViewerGDI.1.0.2\lib\net40\Microsoft.Msagl.GraphViewerGdi.dll"
+
+#r @"D:\Repos\automatic-graph-layout\GraphLayout\tools\WpfGraphControl\bin\Debug\Microsoft.Msagl.WpfGraphControl.dll"
+#r "PresentationCore"
+#r "PresentationFramework"
+#r "WindowsBase"
 
 #load "Graph.fs"
