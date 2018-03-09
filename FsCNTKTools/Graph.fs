@@ -176,7 +176,7 @@ module Graph =
       let baseVxs = allVxs |> List.filter (uid>>sgIds.Contains>>not)
       let root = new Subgraph("root")
       let subGraphs = blockVxs |> List.map (fun v -> uid v, new Subgraph("sg_" + uid v, UserData=v, LabelText=nodeLabel v))
-      let sgMap = subGraphs |>  Map.ofList
+      let sgMap = subGraphs |> Map.ofList
       let nodes = baseVxs |> List.map (fun v -> new Node(uid v, UserData=v, LabelText=nodeLabel v))
       let nodeMap = nodes |> List.map (fun n -> n.Id,n) |> Map.ofList
 

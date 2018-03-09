@@ -11,10 +11,12 @@ open System.Windows.Controls
 type C = CNTK.CNTKLib
 
 let test_model = __SOURCE_DIRECTORY__ + "/test_model.bin"
+let t2 = @"D:\repodata\fscntk\m_fs_untrained.bin"
 
 let device = DeviceDescriptor.GPUDevice(0)
 
 let model = Function.Load(test_model,device)
+let model_t2 = Function.Load(t2,device)
 
 let inline mCollect m k v = 
   let vs = match m |> Map.tryFind k with Some ls -> v::ls | None -> [v]
@@ -188,7 +190,7 @@ let removeBlockParameterLinks (((vx,es),subgraphs) as graphs) =
   //visualize ((vx,es),subgraphs)
 
 let (((vx,es),subgraphs) as graphs) = 
-  computationGraphs true model 
+  computationGraphs true model_t2 
   |> removeBlockParameterLinks 
   //|> relinkBlockOutputs 
   |> relinkBlockInputs
