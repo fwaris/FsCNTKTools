@@ -131,7 +131,7 @@ let relinkBlockInputs (((vx,es),subgraphs) as graphs) =
   let linkMap = dict links 
   let phMap = blkPhs |> List.map (fun (c,v,f) -> v,f) |> dict   
   let remappedInputs = blkInps |> List.map (remapTo phMap linkMap)
-  let toRemove = remappedInputs |>  List.map (fun e -> e.From,e.To) |> set
+  let toRemove = blkInps @ remappedInputs |> List.map (fun e -> e.From,e.To) |> set
   let es = es |> List.filter (fun e->toRemove.Contains(e.From,e.To) |> not) 
   let es = es @ remappedInputs
   let subgraphs = subgraphs |> List.map (fun sg -> 
@@ -158,7 +158,7 @@ let relinkBlockOutputs (((vxs,es),subgraphs) as graphs) =
 
   let blkOutEdges = 
     es 
-    |> List.filter (fun e -> possibleTargets.Contains e.To)
+    //|> List.filter (fun e -> possibleTargets.Contains e.To)
     |> List.choose (fun e -> blkOutpts |> Map.tryFind e.From |> Option.map (fun _->e.From,e)) 
 
   let uniqOutEs = //outputs may go to multiple places so pick unique ones for matching
@@ -187,7 +187,7 @@ let relinkBlockOutputs (((vxs,es),subgraphs) as graphs) =
   let blkRoots = blkOutpts |> Map.toSeq |> Seq.collect (fun (c,xs) -> xs |> List.map(fun (_,v,f) -> v,f)) |> dict
   let linkMap = dict links
   let remappedOutputs = blkOutEdges |> List.map snd |> List.map (remapFrom blkRoots linkMap)
-  let toRemove = blkOutEdges |> List.map snd |> List.map (fun e->e.From,e.To) |> set
+  let toRemove = (blkOutEdges |> List.map snd) @ remappedOutputs |> List.map (fun e->e.From,e.To) |> set
   let es = es |> List.filter (fun e->toRemove.Contains(e.From,e.To) |> not)    //block ouput edges removed
   let es = es @ remappedOutputs
   let sgVxsToRemove = blkRoots.Keys |> Seq.map(fun v->v.Uid) |> set
@@ -215,8 +215,8 @@ let removeBlockParameterLinks (((vx,es),subgraphs) as graphs) =
 let (((vx,es),subgraphs) as graphs) = 
   computationGraphs true model_t2 
   |> removeBlockParameterLinks 
-  //|> relinkBlockOutputs 
-  //|> relinkBlockInputs
+  |> relinkBlockOutputs 
+  |> relinkBlockInputs
 
 
 visualize graphs

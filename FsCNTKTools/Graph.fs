@@ -228,34 +228,53 @@ module Graph =
       let rootNodes = 
         vertices 
         |> List.filter (uid >> subgraphNodeIds.Contains >> not) 
-        |> List.choose (uid >> nodeMap.TryFind) //nodes not in subgraphs are in the root graph
+        |> List.choose (uid >> nodeMap.TryFind) 
 
-      let rootNodeSubj = rootNodes |> List.map (fun n->n.Id, new Subgraph("sg_" + n.Id, UserData=n.UserData, LabelText=n.LabelText))
-      let nodes = let h = HashSet rootNodes in  nodes |> List.filter (h.Contains >> not)
+      //nodes not in subgraphs are in the root subgraph
+      //turn them into subgraphs and exclude then from other nodes 
+      //subgraphs can only be linked to subgraphs (it seems in msagl) to this way root subgraph nodes can link to subgraph nodes
+      let nodes,rootNodes =
+        if List.isEmpty subGraphs then 
+          nodes,rootNodes
+        else
+          let rootNodeSubgraphs = rootNodes |> List.map (fun n->
+            let sg = new Subgraph(n.Id, UserData=n.UserData, LabelText=n.LabelText)
+            sg.Attr.LabelMargin <- 20
+            //let dummyNode = new Node(sg.Id + "1", LabelText="")
+            //g.AddNode dummyNode
+            //sg.AddNode dummyNode        
+            sg :> Node)
+          let nodes = let h = HashSet rootNodes in  nodes |> List.filter (h.Contains >> not)
+          nodes,rootNodeSubgraphs
 
 
       g.RootSubgraph <- root
       nodes |> List.iter g.AddNode
       subGraphs |> List.iter (snd >> root.AddSubgraph)
-      rootNodeSubj |> List.iter (snd >> root.AddNode)
+      rootNodes |> List.iter (root.AddNode) //this might break in future as we are mixing subgraphs and nodes
 
       subgraphNodes |> Map.iter (fun sgId vxIds -> 
         sgMap.TryFind(sgId) |> Option.iter(fun sgNode -> 
           vxIds |> List.iter (nodeMap.TryFind >> (Option.iter sgNode.AddNode)))) 
       
       let es = edges @ (List.collect (fun sg->sg.Edges) subgraphs)
-      let sgIdMap = sgMap |> Map.toSeq |> Seq.append rootNodeSubj |> Seq.map (fun (k,sg)->k,sg.Id) |> Map.ofSeq
+      let sgIdMap = sgMap |> Map.map (fun k v->v.Id) // |> Seq.append rootNodes |> List.map(fun |> Seq.map (fun (k,sg)->k,sg.Id) |> Map.ofSeq
       let es' =
         es 
-        |> List.map (fun e -> 
-          match sgIdMap.TryFind e.From, sgIdMap.TryFind e.To with
-          | Some sgFrm, Some sgTo -> 
-            {e with 
-              From = sgFrm   //retarget edges to subgraphs nodes 
-              To   = sgTo
-            }
-          | _ -> e
-        )
+        |> List.map (fun e ->
+          { e with
+              From = sgIdMap.TryFind e.From |> Option.defaultValue e.From
+              To    = sgIdMap.TryFind e.To |> Option.defaultValue e.To
+          })
+        //|> List.map (fun e -> 
+        //  match sgIdMap.TryFind e.From, sgIdMap.TryFind e.To with
+        //  | Some sgFrm, Some sgTo -> 
+        //    {e with 
+        //      From = sgFrm   //retarget edges to subgraphs nodes 
+        //      To   = sgTo
+        //    }
+        //  | _ -> e
+        //)
         |> List.map (fun e->g.AddEdge(e.From,edgeLabel e.Var,e.To))
       g
   
