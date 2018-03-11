@@ -22,15 +22,23 @@ module Graph =
   let isOutput = function Vv v when v.IsOutput -> true | _ -> false
   let toSubG uid (vx,es) = {Container=uid; Vertices=vx; Edges=es}
 
-
-
   let toVertex (n:obj) = 
     match n with 
     | :? Function as f -> Vf f 
     | :? Variable as v -> Vv v 
     | _ -> failwith "unknown node"
 
-  let uid = function Vf n -> n.Uid | Vv n ->n.Uid
+  let uid = function 
+    | Vf n -> n.Uid 
+    | Vv n -> 
+      //if n.IsInput then
+      //  let i = 1
+      //  ()
+      //if String.IsNullOrWhiteSpace n.Uid then 
+      //  n.ToFunction().Uid 
+      //else 
+        n.Uid
+
   let name = function Vf n -> n.Name | Vv n->n.Name
 
   let isVisited id = Set.contains id
@@ -89,17 +97,41 @@ module Graph =
     let es' = collapsedEdges 
     vx',es'
 
+//remove edges that have the same source and destination
+//happens with Combine op, at least
+  let excludeSelfLinks (vxs,es) = vxs, es |> List.filter (fun e -> e.From<>e.To)
+    
+  let axisVector (is:Axis seq) =
+      let vs = new AxisVector(Seq.length is)
+      is |>  Seq.iter vs.Add
+      vs
+
+  //msagl requires names for all nodes, input nodes can be nameless so replace them if need be
+  let fixFunction (fn:Function) = 
+    let nameless = fn.Inputs |> Seq.filter (fun v-> v.IsInput && String.IsNullOrWhiteSpace v.Name) |> Seq.toList
+    if Seq.isEmpty nameless then
+      fn
+    else
+      let nClones = nameless |> List.mapi (fun i v-> 
+              let name = sprintf "Unamed input %d" i
+              CNTKLib.InputVariable(v.Shape,v.IsSparse,v.DataType,v.NeedsGradient,name,axisVector v.DynamicAxes))
+      let mapping = Seq.zip nameless nClones |> dict
+      fn.Clone(ParameterCloningMethod.Share,mapping)
+
   //create the computational graph for a single function
   let functionGraph (f:Function) = 
-    let (vx,es,vs) = traverse ([],Set.empty,Set.empty) f.RootFunction
+    let (vxs,es,vs) = traverse ([],Set.empty,Set.empty) f.RootFunction
     let es = Set.union es (f.Outputs |> Seq.map (fun v -> v.Owner.Uid,v.Uid) |> set)
-    collapseVarEdges (vx,es)
+    (vxs,es)
+    |> collapseVarEdges
+    |> excludeSelfLinks
 
   //create root computational graph and optionally subgraphs nested one level down
-  let computationGraphs expand (fn:Function) =
+  let computationGraphs expandBlocks (fn:Function) =
+    //let fn = fixFunction fn
     let (vx,es) = functionGraph fn
     let subgraphs = 
-      if expand then 
+      if expandBlocks then 
         vx |> List.choose (function 
         | Vf fn when fn.IsBlock -> fn.BlockRoot() |> functionGraph |> toSubG fn.Uid |> Some
         | _ -> None)
@@ -110,6 +142,7 @@ module Graph =
   //module supporting graph visualization
   module grph = 
     open Microsoft.Msagl.Drawing 
+    open System.Collections.Generic
     
     let edgeLabel (v:Variable) = 
       if v.IsConstant then
@@ -172,8 +205,8 @@ module Graph =
       let g = new Microsoft.Msagl.Drawing.Graph()
       let allVxs = vertices @ (List.collect (fun v -> v.Vertices) subgraphs)
       let sgIds = subgraphs |> List.map (fun sg->sg.Container) |> set
-      let blockVxs = allVxs |> List.filter (uid>>sgIds.Contains)
-      let baseVxs = allVxs |> List.filter (uid>>sgIds.Contains>>not)
+      let blockVxs = allVxs |> List.filter (uid >> sgIds.Contains)
+      let baseVxs = allVxs |> List.filter (uid >> sgIds.Contains >> not)
       let root = new Subgraph("root")
       let subGraphs = blockVxs |> List.map (fun v -> uid v, new Subgraph("sg_" + uid v, UserData=v, LabelText=nodeLabel v))
       let sgMap = subGraphs |> Map.ofList
@@ -192,19 +225,38 @@ module Graph =
 
       let subgraphNodeIds = subgraphNodes |> Map.toSeq |> Seq.collect snd |> set
 
-      let rootNodes = vertices |> List.filter (uid >> subgraphNodeIds.Contains >> not) |> List.choose (uid >> nodeMap.TryFind) //any node not in subgraph is in root subgraph
+      let rootNodes = 
+        vertices 
+        |> List.filter (uid >> subgraphNodeIds.Contains >> not) 
+        |> List.choose (uid >> nodeMap.TryFind) //nodes not in subgraphs are in the root graph
+
+      let rootNodeSubj = rootNodes |> List.map (fun n->n.Id, new Subgraph("sg_" + n.Id, UserData=n.UserData, LabelText=n.LabelText))
+      let nodes = let h = HashSet rootNodes in  nodes |> List.filter (h.Contains >> not)
+
 
       g.RootSubgraph <- root
       nodes |> List.iter g.AddNode
-      subGraphs |> List.iter (snd >> root.AddSubgraph )
-      rootNodes |> List.iter root.AddNode
-      subgraphNodes |> Map.iter (fun sgId vxIds -> sgMap.TryFind(sgId) |> Option.iter(fun sgNode -> vxIds |> List.iter (nodeMap.TryFind>>(Option.iter sgNode.AddNode)))) 
+      subGraphs |> List.iter (snd >> root.AddSubgraph)
+      rootNodeSubj |> List.iter (snd >> root.AddNode)
+
+      subgraphNodes |> Map.iter (fun sgId vxIds -> 
+        sgMap.TryFind(sgId) |> Option.iter(fun sgNode -> 
+          vxIds |> List.iter (nodeMap.TryFind >> (Option.iter sgNode.AddNode)))) 
       
       let es = edges @ (List.collect (fun sg->sg.Edges) subgraphs)
-      let allNodeMaps =[sgMap |> Map.map(fun k v->v:>Node) ;nodeMap]
-      es 
-      |> List.filter (fun e->(sgMap.ContainsKey e.From || sgMap.ContainsKey e.To) |> not)
-      |> List.iter (fun e->g.AddEdge(e.From,edgeLabel e.Var,e.To) |> ignore)
+      let sgIdMap = sgMap |> Map.toSeq |> Seq.append rootNodeSubj |> Seq.map (fun (k,sg)->k,sg.Id) |> Map.ofSeq
+      let es' =
+        es 
+        |> List.map (fun e -> 
+          match sgIdMap.TryFind e.From, sgIdMap.TryFind e.To with
+          | Some sgFrm, Some sgTo -> 
+            {e with 
+              From = sgFrm   //retarget edges to subgraphs nodes 
+              To   = sgTo
+            }
+          | _ -> e
+        )
+        |> List.map (fun e->g.AddEdge(e.From,edgeLabel e.Var,e.To))
       g
   
   //let visualize ((nodes,edges),subgraphs) =  
