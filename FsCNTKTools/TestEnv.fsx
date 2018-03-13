@@ -20,7 +20,15 @@ let testModelLoad() =
   Function.Load(test_model,device)
   // testModelLoad()
 
+open FsCNTK.Tools
 
-let testGraph() = Function.Load(test_model,device) |> FSCNTK.Tools.Graph.showGraph false
-//let testGraph() = Function.Load(@"D:\repodata\fscntk\m_fs_untrained.bin",device) |> FSCNTK.Tools.Graph.showGraph
-testGraph()
+//list the blocks in the function for possible expansion
+//note the uids are assigned when model is loaded
+let blocks() = Function.Load(test_model,device) |> ModelGraph.blocks 
+
+let model = Function.Load(test_model,device)
+ModelGraph.blocks model
+
+let showGraph_NoExpansion() = model |> ModelViz.showGraph NoExpansion
+let showGraph_ExpandAll()   = model |> ModelViz.showGraph AllBlocks
+let showGraph_ExpandSome()  = model |> ModelViz.showGraph (Blocks ["LSTM"])

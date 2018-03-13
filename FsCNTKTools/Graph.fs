@@ -1,10 +1,21 @@
-﻿namespace FSCNTK.Tools
+﻿namespace FsCNTK.Tools
 open CNTK
 open System
 type C = CNTK.CNTKLib
-  open System.Collections.Generic
+open System.Collections.Generic
 
-module Graph =
+type Vertex = Vf of Function | Vv of Variable
+
+type VarEdge = {From:string; To:string; Var:Variable; IsRemapped:bool}
+  with
+  static member Default = {From="";To="";IsRemapped=false; Var=null}
+
+type SubG = {Container:string; Vertices:Vertex list; Edges:VarEdge list}
+
+type Expand = NoExpansion | AllBlocks | Blocks of string list
+
+//module for graph construction from CNTK model
+module ModelGraph =
   
   let inline mCollect m k v = 
     let vs = match m |> Map.tryFind k with Some ls -> v::ls | None -> [v]
@@ -14,9 +25,6 @@ module Graph =
     let vs = match m |> Map.tryFind k with Some ls -> ls |> List.filter (fun v'-> v'<>v) | None -> []
     Map.add k vs m
 
-  type Vertex = Vf of Function | Vv of Variable
-  type Edge = {From:string; To:string; Var:Variable}
-  type SubG = {Container:string; Vertices:Vertex list; Edges:Edge list}
 
   let isPlaceHolder = function Vv v when v.IsPlaceholder -> true | _ -> false
   let isBlock = function Vf v when v.IsBlock -> true | _ -> false
@@ -31,14 +39,7 @@ module Graph =
 
   let uid = function 
     | Vf n -> n.Uid 
-    | Vv n -> 
-      //if n.IsInput then
-      //  let i = 1
-      //  ()
-      //if String.IsNullOrWhiteSpace n.Uid then 
-      //  n.ToFunction().Uid 
-      //else 
-        n.Uid
+    | Vv n -> n.Uid
 
   let name = function Vf n -> n.Name | Vv n->n.Name
 
@@ -84,15 +85,15 @@ module Graph =
           | Some v ->
               let toNodes = match outEges |> Map.tryFind v.Uid with Some ls -> ls | None -> []
               if List.isEmpty toNodes then
-                ({From=vfrm;To=vto;Var=v}::edges,rems)
+                ({VarEdge.Default with From=vfrm;To=vto;Var=v;}::edges,rems)
               else
-                let newEdges = toNodes |> List.map (fun n -> {From=vfrm;To=n;Var=v})
+                let newEdges = toNodes |> List.map (fun n -> {VarEdge.Default with From=vfrm;To=n;Var=v})
                 (newEdges @ edges, v.Uid::rems)
           | None ->
             match outputVarMap |> Map.tryFind vfrm with
             | Some v -> 
               (edges,rems)
-            | None -> {From=vfrm;To=vto;Var=getVar(vfrm,vto)}::edges, rems)
+            | None -> {VarEdge.Default with From=vfrm;To=vto;Var=getVar(vfrm,vto)}::edges, rems)
     let removeSet = set removeNodes
     let vx' = vertices |> List.filter (uid>>removeSet.Contains>>not)
     let es' = collapsedEdges 
@@ -108,6 +109,7 @@ module Graph =
       vs
 
   //msagl requires names for all nodes, input nodes can be nameless so replace them if need be
+  //node this clones the function so the internal UIDs are reassigned
   let fixFunction (fn:Function) = 
     let nameless = fn.Inputs |> Seq.filter (fun v-> v.IsInput && String.IsNullOrWhiteSpace v.Name) |> Seq.toList
     if Seq.isEmpty nameless then
@@ -158,25 +160,25 @@ module Graph =
         Some v                                                                       //pick the one with the closes axes signature
 
   let remapTo 
-    (phMap:IDictionary<Variable,Function>) 
-    (linkMap:IDictionary<Variable,Variable>)
-    (edge:Edge)
+    (phMap:IDictionary<Variable,Function>)   //placeholder to target function
+    (linkMap:IDictionary<Variable,Variable>) 
+    (edge:VarEdge)
     = 
     match linkMap.TryGetValue(edge.Var) with
     | true,ph -> 
       let targetFunction = phMap.[ph]
-      {edge with To=targetFunction.Uid}
+      {edge with To=targetFunction.Uid; IsRemapped=true}
     | false,_ -> edge
 
   let remapFrom 
-    (phMap:IDictionary<Variable,Function>) 
+    (srcMap:IDictionary<Variable,Function>) 
     (linkMap:IDictionary<Variable,Variable>)
-    (edge:Edge)
+    (edge:VarEdge)
     = 
     match linkMap.TryGetValue(edge.Var) with
-    | true,ph -> 
-      let srcFunction = phMap.[ph]
-      {edge with From=srcFunction.Uid}
+    | true,v -> 
+      let srcFunction = srcMap.[v]
+      {edge with From=srcFunction.Uid; IsRemapped=true; Var=v}
     | false,_ -> edge
 
   let allVertices ((vx,es),subgraphs) = vx @ (List.collect (fun v -> v.Vertices) subgraphs) 
@@ -294,7 +296,15 @@ module Graph =
         Vertices = sg.Vertices |> List.filter (uid >> sgVxsToRemove.Contains >> not) 
         Edges=sg.Edges |> List.filter (fun e->sgVxsToRemove.Contains e.To |> not)})
     ((vxs,es),subgraphs)
-  
+
+  ///List block operations and their unique ids in the given function.
+  ///Results can be used to identify which blocks to expand in the graph
+  let blocks :Function -> string list = 
+    functionGraph 
+    >> fst 
+    >> List.filter isBlock 
+    >> List.map uid
+ 
   //remove parameter links to block subgraphs (outer edges)
   //(keep parameter links to nodes inside the subgraphs)
   let removeBlockParameterLinks (((vx,es),subgraphs) as graphs) =
@@ -307,181 +317,180 @@ module Graph =
     let keepEdges = es |> List.filter (fun e -> fromSet.Contains e.From |> not)
     (vx,keepEdges),subgraphs
 
-  //create root computational graph and optionally subgraphs nested one level down
-  let computationGraphs expandBlocks (fn:Function) =
-    //let fn = fixFunction fn
+  let private chooseBlocks blocks matchList =
+    let ms = matchList |> List.map (fun (s:string) ->s.ToLower())
+    blocks 
+    |> List.map (fun (a:string,b:string) -> b, [a.ToLower();b.ToLower()])
+    |> List.choose (fun (b,ls) -> 
+      let allParis = seq {for l in ls do for m in ms do yield (l,m)}
+      if allParis |> Seq.exists (fun (l,m)->l.Contains m) then
+        Some b
+      else
+        None)
+
+  ///create root computational graph and optionally subgraphs nested one level down
+  let computationGraphs expand (fn:Function) =
     let (vxs,es) = functionGraph fn
-    if not expandBlocks then
+    let subgraphs =
+      match expand with
+      | NoExpansion -> []
+      | AllBlocks ->
+            vxs |> List.choose (function 
+            | Vf fn when fn.IsBlock -> fn.BlockRoot() |> functionGraph |> toSubG fn.Uid |> Some
+            | _ -> None)
+      | Blocks list ->
+            let blockIds = vxs |> List.filter isBlock |> List.choose (function Vf f-> Some(f.OpName,f.Uid) | _ -> None)
+            let targetBlocks = chooseBlocks blockIds list |> set
+            vxs |> List.choose (function 
+            | Vf fn when targetBlocks.Contains fn.Uid -> fn.BlockRoot() |> functionGraph |> toSubG fn.Uid |> Some
+            | x -> None)
+    if List.isEmpty subgraphs then
       (vxs,es),[]
     else
-      let subgraphs = 
-        if expandBlocks then 
-          vxs |> List.choose (function 
-          | Vf fn when fn.IsBlock -> fn.BlockRoot() |> functionGraph |> toSubG fn.Uid |> Some
-          | _ -> None)
-        else []
       ((vxs,es),subgraphs) 
       |> removeBlockParameterLinks
       |> relinkBlockOutputs
       |> relinkBlockInputs
+
   
-  //module supporting graph visualization
-  module grph = 
-    open Microsoft.Msagl.Drawing 
-    open System.Collections.Generic
-    
-    let edgeLabel (v:Variable) = 
-      if v.IsConstant then
-        ""
-      else
-        sprintf "%s\r\n%A" v.Uid  (v.Shape.Dimensions |> Seq.toList)
+//module for visualization of model graphs
+module ModelViz = 
+  open Microsoft.Msagl.Drawing 
+  open ModelGraph
 
-    let nodeLabel = function
-      | Vf f -> f.OpName
-      | Vv v -> 
-        let n = 
-          if String.IsNullOrWhiteSpace(v.Name) |> not then v.Name
-          elif v.IsInput then "Input"
-          elif v.IsOutput then "Output"
-          elif v.IsParameter then "Parameter"
-          elif v.IsPlaceholder then "Placeholder"
-          elif v.IsConstant then 
-            let cv = v.GetValue()
-            let cv = Value.Create(v.Shape,[cv],DeviceDescriptor.CPUDevice)
-            let cval = cv.GetDenseData<float32>(v).[0].[0]
-            string cval
-          else ""
-        sprintf "%s\r\n%A" n (v.Shape.Dimensions |> Seq.toList)
+  let edgeLabel (e:VarEdge) = 
+    let v = e.Var
+    if v.IsConstant then
+      ""
+    else
+      sprintf "%s\r\n%A" v.Uid  (v.Shape.Dimensions |> Seq.toList)
 
-    let makeGraph (vertices,edges) =
-      let g = new Microsoft.Msagl.Drawing.Graph()
-      let drawingNodes = vertices |> List.map (uid>>g.AddNode) 
-      drawingNodes 
-      |> List.zip vertices 
-      |> List.iter (fun (v,n)->
-        n.LabelText <- nodeLabel v
-        n.Attr.LabelMargin <- 5
-        match v with 
-        | Vv vr -> 
-          if vr.IsInput then 
-            n.Attr.Shape <- Shape.Ellipse
-            n.Attr.FillColor <- Color.Azure
-          elif vr.IsOutput then 
-            n.Attr.Shape <- Shape.Ellipse
-            n.Attr.FillColor <- Color.LavenderBlush
-            n.Attr.LineWidth <- 2.0
-          elif vr.IsConstant then 
-            n.Attr.Shape <- Shape.Mdiamond
-            n.Attr.FillColor <- Color.Cornsilk
-        | Vf fn -> 
-          n.Attr.FillColor <- Color.Bisque
-          if fn.IsBlock then n.Attr.LineWidth <- 3.0
-      )
-      let drawingEdges = edges |> Seq.map(fun e -> let ed = g.AddEdge(e.From,e.To) in ed.UserData <- e.Var; ed) |> Seq.toList
-      (drawingEdges,edges) ||> List.zip |> List.iter (fun (e,ev) -> 
-        //e.Label <- new Label()
-        e.LabelText <- edgeLabel ev.Var
-        //e.Label.FontSize <- 8.0
-        //e.Label.Text <- edgeLabel ev.Var
-      )
-      g
+  let opNameMap =
+    [
+      "times","@"
+      "plus","+"
+      "minus","-"
+      "elementtimes",".*"
+    ]
+    |> Map.ofList
 
+  let opName (s:string) = s.ToLower() |> Map.tryFind <| opNameMap
 
-    let makeGraphs ((vertices,edges),subgraphs) =
-      let g = new Microsoft.Msagl.Drawing.Graph()
-      let allVxs = vertices @ (List.collect (fun v -> v.Vertices) subgraphs)
-      let sgIds = subgraphs |> List.map (fun sg->sg.Container) |> set
-      let blockVxs = allVxs |> List.filter (uid >> sgIds.Contains)
-      let baseVxs = allVxs |> List.filter (uid >> sgIds.Contains >> not)
-      let root = new Subgraph("root")
-      let subGraphs = blockVxs |> List.map (fun v -> uid v, new Subgraph("sg_" + uid v, UserData=v, LabelText=nodeLabel v))
-      let sgMap = subGraphs |> Map.ofList
-      let nodes = baseVxs |> List.map (fun v -> new Node(uid v, UserData=v, LabelText=nodeLabel v))
-      let nodeMap = nodes |> List.map (fun n -> n.Id,n) |> Map.ofList
+  let nodeLabel = function
+    | Vf f -> f.OpName |> opName |> Option.defaultValue f.OpName
+    | Vv v -> 
+      let n = 
+        if String.IsNullOrWhiteSpace(v.Name) |> not then v.Name 
+        elif v.IsInput then "Input"
+        elif v.IsOutput then "Output"
+        elif v.IsParameter then "Parameter"
+        elif v.IsPlaceholder then "Placeholder"
+        elif v.IsConstant then 
+          let cv = v.GetValue()
+          let cv = Value.Create(v.Shape,[cv],DeviceDescriptor.CPUDevice)
+          let cval = cv.GetDenseData<float32>(v).[0].[0]
+          string cval
+        else ""
+      sprintf "%s\r\n%A" n (v.Shape.Dimensions |> Seq.toList)
 
-      let subgraphNodes =          //subgraphs own the their own vertices plus any parameter inputs (the graph looks better)
-        (Map.empty,subgraphs) 
-        ||> List.fold(fun acc sg -> 
-          (acc,sg.Vertices) 
-          ||> List.fold (fun acc v-> 
-            let acc = mCollect acc sg.Container (uid v)
-            match v with
-            | Vf f -> (acc,f.Inputs) ||> Seq.fold(fun acc i -> if i.IsParameter then mCollect acc sg.Container (uid v) else acc)
-            | _ -> acc))
+  let styleNode (n:Node) =
+      let v = n.UserData :?> Vertex
+      n.LabelText <- nodeLabel v
+      n.Attr.LabelMargin <- 5
+      match v with 
+      | Vv vr -> 
+        if vr.IsInput then 
+          n.Attr.Shape <- Shape.Ellipse
+          n.Attr.FillColor <- Color.Azure
+        elif vr.IsOutput then 
+          n.Attr.Shape <- Shape.Ellipse
+          n.Attr.FillColor <- Color.LavenderBlush
+          n.Attr.LineWidth <- 2.0
+        elif vr.IsConstant then 
+          n.Attr.Shape <- Shape.Mdiamond
+          n.Attr.FillColor <- Color.Cornsilk
+      | Vf fn -> 
+        n.Attr.FillColor <- Color.Bisque
+        fn.OpName |> opName |> Option.iter (fun _ -> n.Attr.Shape <- Shape.Circle)
+        if fn.IsBlock then n.Attr.LineWidth <- 3.0
 
-      let subgraphNodeIds = subgraphNodes |> Map.toSeq |> Seq.collect snd |> set
+  let styleEdge (e:Edge) =
+      let tE = e.UserData :?> VarEdge
+      e.LabelText <- edgeLabel tE
+      if tE.IsRemapped then e.Attr.AddStyle Style.Dotted
 
-      let rootNodes = 
-        vertices 
-        |> List.filter (uid >> subgraphNodeIds.Contains >> not) 
-        |> List.choose (uid >> nodeMap.TryFind) 
+  //simple graph (no subgraphs)
+  let makeGraph (vertices,edges) =
+    let g = new Microsoft.Msagl.Drawing.Graph()
+    let drawingNodes = vertices |> List.map (fun v -> let n = (uid>>g.AddNode) v in n.UserData<-v; n)
+    drawingNodes |> List.iter styleNode
+    let drawingEdges = edges |> List.map(fun e -> let ed = g.AddEdge(e.From,e.To) in ed.UserData <- e; ed)
+    drawingEdges |> List.iter styleEdge
+    g
 
-      //nodes not in subgraphs are in the root subgraph
-      //turn them into subgraphs and exclude then from other nodes 
-      //subgraphs can only be linked to subgraphs (it seems in msagl) to this way root subgraph nodes can link to subgraph nodes
-      let nodes,rootNodes =
-        if List.isEmpty subGraphs then 
-          nodes,rootNodes
-        else
-          let rootNodeSubgraphs = rootNodes |> List.map (fun n->
-            let sg = new Subgraph(n.Id, UserData=n.UserData, LabelText=n.LabelText)
-            sg.Attr.LabelMargin <- 20
-            //let dummyNode = new Node(sg.Id + "1", LabelText="")
-            //g.AddNode dummyNode
-            //sg.AddNode dummyNode        
-            sg :> Node)
-          let nodes = let h = HashSet rootNodes in  nodes |> List.filter (h.Contains >> not)
-          nodes,rootNodeSubgraphs
+  //graph with subgraphs
+  let makeGraphs ((vertices,edges),subgraphs) =
+    let g = new Microsoft.Msagl.Drawing.Graph()
+    let root = new Subgraph("root")
 
+    let allVxs = vertices @ (List.collect (fun v -> v.Vertices) subgraphs)
+    let sgIds = subgraphs |> List.map (fun sg->sg.Container) |> set
+    let blockVxs = allVxs |> List.filter (uid >> sgIds.Contains)
+    let baseVxs = allVxs |> List.filter (uid >> sgIds.Contains >> not)
+    let subGraphs = blockVxs |> List.map (fun v -> uid v, new Subgraph("sg_" + uid v, UserData=v, LabelText=nodeLabel v))
+    let sgMap = subGraphs |> Map.ofList
+    let nodes = baseVxs |> List.map (fun v -> new Node(uid v, UserData=v, LabelText=nodeLabel v))
+    let nodeMap = nodes |> List.map (fun n -> n.Id,n) |> Map.ofList
 
-      g.RootSubgraph <- root
-      nodes |> List.iter g.AddNode
-      subGraphs |> List.iter (snd >> root.AddSubgraph)
-      rootNodes |> List.iter (root.AddNode) //this might break in future as we are mixing subgraphs and nodes
+    let subgraphNodes =          //subgraphs own vertices plus any parameter inputs (the graph looks better)
+      (Map.empty,subgraphs) 
+      ||> List.fold(fun acc sg -> 
+        (acc,sg.Vertices) 
+        ||> List.fold (fun acc v-> 
+          let acc = mCollect acc sg.Container (uid v)
+          match v with
+          | Vf f -> (acc,f.Inputs) ||> Seq.fold(fun acc i -> if i.IsParameter then mCollect acc sg.Container (uid v) else acc)
+          | _ -> acc))
 
-      subgraphNodes |> Map.iter (fun sgId vxIds -> 
-        sgMap.TryFind(sgId) |> Option.iter(fun sgNode -> 
-          vxIds |> List.iter (nodeMap.TryFind >> (Option.iter sgNode.AddNode)))) 
+    let subgraphNodeIds = subgraphNodes |> Map.toSeq |> Seq.collect snd |> set
+
+    let rootNodes = 
+      vertices 
+      |> List.filter (uid >> subgraphNodeIds.Contains >> not) 
+      |> List.choose (uid >> nodeMap.TryFind) 
+
+    nodes |> List.iter styleNode
+
+    g.RootSubgraph <- root
+    nodes |> List.iter g.AddNode
+    subGraphs |> List.iter (snd >> root.AddSubgraph)
+    rootNodes |> List.iter (root.AddNode) //this might break in future as we are mixing subgraphs and nodes
+
+    subgraphNodes |> Map.iter (fun sgId vxIds -> 
+      sgMap.TryFind(sgId) |> Option.iter(fun sgNode -> 
+        vxIds |> List.iter (nodeMap.TryFind >> (Option.iter sgNode.AddNode)))) 
       
-      let es = edges @ (List.collect (fun sg->sg.Edges) subgraphs)
-      let sgIdMap = sgMap |> Map.map (fun k v->v.Id) // |> Seq.append rootNodes |> List.map(fun |> Seq.map (fun (k,sg)->k,sg.Id) |> Map.ofSeq
-      let es' =
-        es 
-        |> List.map (fun e ->
-          { e with
-              From = sgIdMap.TryFind e.From |> Option.defaultValue e.From
-              To    = sgIdMap.TryFind e.To |> Option.defaultValue e.To
-          })
-        //|> List.map (fun e -> 
-        //  match sgIdMap.TryFind e.From, sgIdMap.TryFind e.To with
-        //  | Some sgFrm, Some sgTo -> 
-        //    {e with 
-        //      From = sgFrm   //retarget edges to subgraphs nodes 
-        //      To   = sgTo
-        //    }
-        //  | _ -> e
-        //)
-        |> List.map (fun e->g.AddEdge(e.From,edgeLabel e.Var,e.To))
-      g
+    let es = edges @ (List.collect (fun sg->sg.Edges) subgraphs)
+    let sgIdMap = sgMap |> Map.map (fun k v->v.Id) // |> Seq.append rootNodes |> List.map(fun |> Seq.map (fun (k,sg)->k,sg.Id) |> Map.ofSeq
+    let drawingEdges =
+      es 
+      |> List.map (fun e ->
+        { e with
+            From = sgIdMap.TryFind e.From |> Option.defaultValue e.From
+            To    = sgIdMap.TryFind e.To |> Option.defaultValue e.To
+        })
+      |> List.map (fun e->g.AddEdge(e.From,edgeLabel e,e.To, UserData=e))
+    drawingEdges |> List.iter styleEdge
+    g
   
-  //let visualize ((nodes,edges),subgraphs) =  
-  //  let gv = new GraphViewer()
-  //  let window = new Window(Title = "Simple Test", Width = 800., Height = 600.)
-  //  let d = new DockPanel()
-  //  window.Content <- d
-  //  gv.BindToPanel(d)
-  //  window.Show()
-  //  let g = grph.makeGraphs ((nodes,edges),subgraphs)
-
-  //  gv.Graph <- g
-
+  ///visualize a graph given vertices, edges and subgraphs
   let visualize ((nodes,edges),subgraphs) =
     let gv = new Microsoft.Msagl.GraphViewerGdi.GViewer()
     let g = 
       if List.isEmpty subgraphs then
-        grph.makeGraph(nodes,edges)
+        makeGraph(nodes,edges)
       else
-        grph.makeGraphs ((nodes,edges),subgraphs)
+        makeGraphs ((nodes,edges),subgraphs)
     g.Edges |> Seq.iter (fun e->  if e.Label<> null then e.Label.FontSize <- 8.0)
     gv.Graph <- g
     let f = new System.Windows.Forms.Form()
@@ -493,4 +502,5 @@ module Graph =
     f.ResumeLayout()
     f.Show()
   
+  ///construct and show the function graph
   let showGraph expand f = ((computationGraphs expand) >> visualize) f
