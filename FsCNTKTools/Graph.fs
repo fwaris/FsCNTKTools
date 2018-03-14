@@ -21,6 +21,14 @@ module ModelGraph =
     let vs = match m |> Map.tryFind k with Some ls -> v::ls | None -> [v]
     Map.add k vs m
 
+  let inline mCollectH (m:#IDictionary<'k,'v list>) k v = 
+    let v' =
+      match m.TryGetValue(k) with
+      | true,ls -> v::ls
+      | false,_ -> [v]
+    m.[k] <- v' 
+    m
+
   let inline mRemove m k v = 
     let vs = match m |> Map.tryFind k with Some ls -> ls |> List.filter (fun v'-> v'<>v) | None -> []
     Map.add k vs m
@@ -242,6 +250,44 @@ module ModelGraph =
         Edges=sg.Edges |> List.filter (fun e->phMap.ContainsKey e.Var |> not)})
     ((vx,es),subgraphs)
 
+  let relinkBlockOutputs2 (((vxs,es),subgraphs) as graphs) = 
+    let sgIds = subgraphs |> List.map (fun g->g.Container) |> set
+
+    let blkOutputMap = 
+      vxs 
+      |> List.filter (uid >> sgIds.Contains) //only look at block functions that are expanded
+      |> List.collect (function 
+        | Vf f when f.IsBlock ->  //e.g. lstm
+          let root = f.BlockRoot() //e.g. combine
+          Seq.zip f.Outputs root.Outputs 
+          |> Seq.map(fun (a,b) -> a,b,root)
+          |> Seq.toList //assume block outputs correspond to block root outputs, by order
+        | _ -> []) 
+
+    let esMap = (Dictionary<_,_>(),es) ||> List.fold (fun acc (e:VarEdge) -> mCollectH acc e.Var e)
+
+    let removeList,remapList = 
+      (([],[]),blkOutputMap) 
+      ||> List.fold (fun (accRemove,accRemap) (blkOutVar,rootFnOutVar,blockRootFn) ->
+        let blkOutEs = esMap.[blkOutVar]
+        let remapped = blkOutEs |> List.map (fun e -> 
+          {e with From=blockRootFn.Uid; Var=rootFnOutVar; IsRemapped=true})
+        let toremove = blkOutEs::accRemove
+        blkOutEs::accRemove,
+        remapped::accRemap)
+
+    let toRemove = removeList |> List.collect (fun es -> es |> List.map (fun e->e.From,e.To)) |> set
+    let es = es |> List.filter (fun e -> toRemove.Contains(e.From,e.To) |> not)
+    let es = es @ (remapList |> List.collect (fun es->es))
+
+    let sgVxsToRemove = blkOutputMap |> Seq.map(fun (_,v,_) ->v.Uid) |> set
+
+    let subgraphs = subgraphs |> List.map (fun sg -> 
+      {sg with
+        Vertices = sg.Vertices |> List.filter (uid >> sgVxsToRemove.Contains >> not) 
+        Edges=sg.Edges |> List.filter (fun e->sgVxsToRemove.Contains e.To |> not)})
+    ((vxs,es),subgraphs)
+
   let relinkBlockOutputs (((vxs,es),subgraphs) as graphs) = 
     let sgIds = subgraphs |> List.map (fun g->g.Container) |> set
     let blkOutpts = 
@@ -256,6 +302,7 @@ module ModelGraph =
         | _ -> []) 
       |> List.groupBy (fun (id,_,_) -> id)
       |> Map.ofList
+    
 
     let blkOutEdges = 
       es 
@@ -349,7 +396,7 @@ module ModelGraph =
     else
       ((vxs,es),subgraphs) 
       |> removeBlockParameterLinks
-      |> relinkBlockOutputs
+      |> relinkBlockOutputs2
       |> relinkBlockInputs
 
   
