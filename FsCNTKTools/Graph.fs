@@ -6,11 +6,11 @@ open System.Collections.Generic
 
 type Vertex = Vf of Function | Vv of Variable
 
-type VarEdge = {From:string; To:string; Var:Variable; IsRemapped:bool}
+type VarEdge = {From:string; To:string; Var:Variable; IsRemapped:bool; ToPlaceholder:bool}
   with
-  static member Default = {From="";To="";IsRemapped=false; Var=null}
+  static member Default = {From="";To="";IsRemapped=false; Var=null; ToPlaceholder=false}
 
-type SubG = {Container:string; Vertices:Vertex list; Edges:VarEdge list}
+type SubG = {Container:string; BlockFn:Function; Vertices:Vertex list; Edges:VarEdge list}
 
 type Expand = NoExpansion | AllBlocks | Blocks of string list
 
@@ -37,7 +37,7 @@ module ModelGraph =
   let isPlaceHolder = function Vv v when v.IsPlaceholder -> true | _ -> false
   let isBlock = function Vf v when v.IsBlock -> true | _ -> false
   let isOutput = function Vv v when v.IsOutput -> true | _ -> false
-  let toSubG uid (vx,es) = {Container=uid; Vertices=vx; Edges=es}
+  let toSubG (blockFn:Function) (vx,es) = {BlockFn=blockFn; Container=blockFn.Uid; Vertices=vx; Edges=es}
 
   let toVertex (n:obj) = 
     match n with 
@@ -117,7 +117,7 @@ module ModelGraph =
       vs
 
   //msagl requires names for all nodes, input nodes can be nameless so replace them if need be
-  //node this clones the function so the internal UIDs are reassigned
+  //Note this clones the function so the internal UIDs are reassigned
   let fixFunction (fn:Function) = 
     let nameless = fn.Inputs |> Seq.filter (fun v-> v.IsInput && String.IsNullOrWhiteSpace v.Name) |> Seq.toList
     if Seq.isEmpty nameless then
@@ -175,7 +175,7 @@ module ModelGraph =
     match linkMap.TryGetValue(edge.Var) with
     | true,ph -> 
       let targetFunction = phMap.[ph]
-      {edge with To=targetFunction.Uid; IsRemapped=true}
+      {edge with To=targetFunction.Uid; IsRemapped=true; ToPlaceholder=true}
     | false,_ -> edge
 
   let remapFrom 
@@ -211,6 +211,21 @@ module ModelGraph =
       | _ -> [])
       |> List.filter (List.isEmpty >> not)
       |> List.collect (fun x->x)
+
+  let relinkBlockInputs2  (((vxs,es),subgraphs) as graphs) =
+    let vxsMap=vxs |> List.filter isBlock |> List.choose (function Vf f -> Some(f.Uid,f) | _ -> None) |> Map.ofList
+
+    let remappedEdges = 
+      subgraphs
+      |> List.map (fun g ->
+        let block = vxsMap.[g.Container]
+        let args = block.Arguments |> Seq.toList
+        let br = block.BlockRoot()
+        let phs = block.Inputs |> Seq.filter (fun p->p.IsPlaceholder) |> Seq.toList
+        let phsBr = g.Vertices |> List.filter isPlaceHolder 
+        phs)
+
+    ((vxs,es),subgraphs)
 
   let relinkBlockInputs (((vx,es),subgraphs) as graphs) =
 
@@ -250,7 +265,7 @@ module ModelGraph =
         Edges=sg.Edges |> List.filter (fun e->phMap.ContainsKey e.Var |> not)})
     ((vx,es),subgraphs)
 
-  let relinkBlockOutputs2 (((vxs,es),subgraphs) as graphs) = 
+  let relinkBlockOutputs (((vxs,es),subgraphs) as graphs) = 
     let sgIds = subgraphs |> List.map (fun g->g.Container) |> set
 
     let blkOutputMap = 
@@ -288,61 +303,6 @@ module ModelGraph =
         Edges=sg.Edges |> List.filter (fun e->sgVxsToRemove.Contains e.To |> not)})
     ((vxs,es),subgraphs)
 
-  let relinkBlockOutputs (((vxs,es),subgraphs) as graphs) = 
-    let sgIds = subgraphs |> List.map (fun g->g.Container) |> set
-    let blkOutpts = 
-      vxs 
-      |> List.filter (uid >> sgIds.Contains) //only look at block functions that are expanded
-      |> List.collect (function 
-        | Vf f when f.IsBlock -> 
-          let root = f.BlockRoot()
-          root.Outputs 
-            |> Seq.map (fun outV -> f.Uid,outV,root) 
-            |> Seq.toList
-        | _ -> []) 
-      |> List.groupBy (fun (id,_,_) -> id)
-      |> Map.ofList
-    
-
-    let blkOutEdges = 
-      es 
-      |> List.choose (fun e -> blkOutpts |> Map.tryFind e.From |> Option.map (fun _->e.From,e)) 
-
-    let uniqOutEs = //outputs may go to multiple places so pick unique ones for matching
-      blkOutEdges 
-      |> List.groupBy fst 
-      |> List.map (fun (k,vs) -> 
-        k,
-        vs 
-        |> List.map (fun (_,e) -> e.Var) 
-        |> HashSet 
-        |> Seq.toList)
-      |> List.collect (fun (k,vs)->vs |> List.map (fun v -> k,v))
-
-    let (links,_) =                                     //block outputs mapped to BlockRoot outputs
-      let accMap = blkOutpts |> Map.map (fun _ xs -> xs |> List.map (fun (_,v,_) -> v))
-      (([],accMap),uniqOutEs) 
-      ||> List.fold (fun (acc,accMap) (blockId,edgeVar) ->
-        accMap 
-        |> Map.tryFind blockId
-        |> Option.bind (matchVars edgeVar)
-        |> Option.map (fun outVar ->        //matched input
-          (edgeVar,outVar)::acc,
-          (mRemove accMap blockId outVar))  //remove matched so its not matched again
-        |> Option.defaultValue (acc,accMap))
-   
-    let blkRoots = blkOutpts |> Map.toSeq |> Seq.collect (fun (c,xs) -> xs |> List.map(fun (_,v,f) -> v,f)) |> dict
-    let linkMap = dict links
-    let remappedOutputs = blkOutEdges |> List.map snd |> List.map (remapFrom blkRoots linkMap)
-    let toRemove = (blkOutEdges |> List.map snd) @ remappedOutputs |> List.map (fun e->e.From,e.To) |> set
-    let es = es |> List.filter (fun e->toRemove.Contains(e.From,e.To) |> not)    //block ouput edges removed
-    let es = es @ remappedOutputs
-    let sgVxsToRemove = blkRoots.Keys |> Seq.map(fun v->v.Uid) |> set
-    let subgraphs = subgraphs |> List.map (fun sg -> 
-      {sg with
-        Vertices = sg.Vertices |> List.filter (uid >> sgVxsToRemove.Contains >> not) 
-        Edges=sg.Edges |> List.filter (fun e->sgVxsToRemove.Contains e.To |> not)})
-    ((vxs,es),subgraphs)
 
   ///List block operations and their unique ids in the given function.
   ///Results can be used to identify which blocks to expand in the graph
@@ -383,21 +343,21 @@ module ModelGraph =
       | NoExpansion -> []
       | AllBlocks ->
             vxs |> List.choose (function 
-            | Vf fn when fn.IsBlock -> fn.BlockRoot() |> functionGraph |> toSubG fn.Uid |> Some
+            | Vf fn when fn.IsBlock -> fn.BlockRoot() |> functionGraph |> toSubG fn |> Some
             | _ -> None)
       | Blocks list ->
             let blockIds = vxs |> List.filter isBlock |> List.choose (function Vf f-> Some(f.OpName,f.Uid) | _ -> None)
             let targetBlocks = chooseBlocks blockIds list |> set
             vxs |> List.choose (function 
-            | Vf fn when targetBlocks.Contains fn.Uid -> fn.BlockRoot() |> functionGraph |> toSubG fn.Uid |> Some
+            | Vf fn when targetBlocks.Contains fn.Uid -> fn.BlockRoot() |> functionGraph |> toSubG fn |> Some
             | x -> None)
     if List.isEmpty subgraphs then
       (vxs,es),[]
     else
       ((vxs,es),subgraphs) 
       |> removeBlockParameterLinks
-      |> relinkBlockOutputs2
-      |> relinkBlockInputs
+      |> relinkBlockOutputs
+      |> relinkBlockInputs2
 
   
 //module for visualization of model graphs
@@ -410,7 +370,8 @@ module ModelViz =
     if v.IsConstant then
       ""
     else
-      sprintf "%s\r\n%A" v.Uid  (v.Shape.Dimensions |> Seq.toList)
+      let toPh = if e.ToPlaceholder then " -> [placeholder??]" else ""
+      sprintf "%s %s\r\n%A" v.Uid toPh  (v.Shape.Dimensions |> Seq.toList)
 
   let opNameMap =
     [
