@@ -6,21 +6,39 @@ open System.Collections.Generic
 
 type Vertex = Vf of Function | Vv of Variable
 
-type VarEdge = {From:string; To:string; Var:Variable; IsRemapped:bool; ToPlaceholder:bool}
+type VarEdge = 
+  {
+    From          : string
+    To            : string
+    Var           : Variable
+    IsRemapped    : bool
+    ToPlaceholder : bool
+  }
   with
   static member Default = {From="";To="";IsRemapped=false; Var=null; ToPlaceholder=false}
 
-type SubG = {Container:string; BlockFn:Function; Vertices:Vertex list; Edges:VarEdge list}
+type SubG = 
+  {
+    Container : string
+    BlockFn   : Function
+    Vertices  : Vertex list
+    Edges     : VarEdge list
+  }
 
-type Graph = {Vertices:Vertex list; Edges : VarEdge list; Subgraphs:SubG list; Named:IDictionary<Variable,string>}
-  with static member Default = {Vertices=[]; Edges=[]; Subgraphs=[]; Named=dict[]}
+type Graph = 
+  {
+    Vertices          : Vertex list
+    Edges             : VarEdge list
+    Subgraphs         : SubG list
+    Named             : IDictionary<Variable,string>
+    RemappedOutEdges  : IDictionary<string*string,VarEdge>
+  }
+  with static member Default = {Vertices=[]; Edges=[]; Subgraphs=[]; Named=dict[]; RemappedOutEdges=dict[]}
 
 type Expand = NoExpansion | AllBlocks | Blocks of string list
 
 //module for graph construction from CNTK model
 module ModelGraph =
-  open CNTK
-  open System.Windows.Markup
   
   let inline mCollect m k v = 
     let vs = match m |> Map.tryFind k with Some ls -> v::ls | None -> [v]
@@ -43,7 +61,7 @@ module ModelGraph =
   let isOutput = function Vv v when v.IsOutput -> true | _ -> false
   let toSubG (blockFn:Function) g = {BlockFn=blockFn; Container=blockFn.Uid; Vertices=g.Vertices; Edges=g.Edges}
   let placeholder = function Vv v when v.IsPlaceholder -> Some v | _ -> None
-  let toFrm e = e.To,e.From
+  let frmTo e = e.From,e.To
 
   let toVertex (n:obj) = 
     match n with 
@@ -134,19 +152,12 @@ module ModelGraph =
       is |>  Seq.iter vs.Add
       vs
 
-  //msagl requires names for all nodes, input nodes can be nameless so replace them if need be
-  //Note this clones the function so the internal UIDs are reassigned
   let fixFunction (fn:Function) = 
-    let nameless = fn.Inputs |> Seq.filter (fun v-> v.IsInput && String.IsNullOrWhiteSpace v.Name && String.IsNullOrWhiteSpace v.Uid) |> Seq.toList
+    let nameless = 
+      fn.Inputs 
+      |> Seq.filter (fun v-> v.IsInput && String.IsNullOrWhiteSpace v.Name && String.IsNullOrWhiteSpace v.Uid) 
+      |> Seq.toList
     fn,nameless |> List.mapi(fun i v->v,sprintf"Input%d" i)
-    //if Seq.isEmpty nameless then
-    //  fn
-    //else
-    //  let nClones = nameless |> List.mapi (fun i v-> 
-    //          let name = sprintf "Unamed input %d" i
-    //          CNTKLib.InputVariable(v.Shape,v.IsSparse,v.DataType,v.NeedsGradient,name,axisVector v.DynamicAxes))
-    //  let mapping = Seq.zip nameless nClones |> dict
-    //  fn.Clone(ParameterCloningMethod.Share,mapping)
 
   //create the computational graph for a single function
   let functionGraph (f:Function) = 
@@ -236,7 +247,7 @@ module ModelGraph =
       let acc = (acc,fn.Placeholders()) ||> Seq.fold (fun (vs:Set<string>,acc) ph -> if vs.Contains ph.Uid then vs,acc else (Set.add ph.Uid vs,ph::acc))
       let acc = (acc,fn.Arguments) ||> Seq.fold (fun acc arg-> if arg.Owner <> null then orderedPh acc arg.Owner else acc)
       acc
-    orderedPh (Set.empty,[]) fn |> snd |> List.rev
+    orderedPh (Set.empty,[]) fn |> snd //|> List.rev  //seems reversing is not needed here
 
   let relinkBlockInputs2 (graph:Graph) =
     let vxsMap = graph.Vertices |> List.filter isBlock |> List.choose (function Vf f -> Some(f.Uid,f) | _ -> None) |> Map.ofList
@@ -248,7 +259,7 @@ module ModelGraph =
         let block = vxsMap.[g.Container]
         let args = block.Arguments |> Seq.toList
         let blkRoot = block.BlockRoot()
-        let phs = orderdPh blkRoot                  //hopefully there is an ordering of placeholders that can be used to match arguments
+        let phs = orderdPh blkRoot          //hopefully there is an ordering of placeholders that can be used to match arguments
 
         let matchedArgs =                   //placheholder argument mapping
           if args.Length = phs.Length then
@@ -256,30 +267,47 @@ module ModelGraph =
           else
             []
         
-        let phArgMap = dict matchedArgs 
+        let phArgMap = dict matchedArgs    //matched placeholder to arguments lookup table
 
-        let phOwnerMap =                //placeholder and owner function map
+        let phOwnerMap =                   //placeholder and owner function map
           g.Vertices 
           |> List.collect (function  | Vf f->  f.Placeholders() |> Seq.toList |> List.map (fun p->p,f)  | _  -> []) 
           |> List.filter (fun (ph,f) -> phArgMap.ContainsKey ph)
           |> dict 
         
-        let addEdges,removeEdges,removeNodes = 
+        let addEdges,removeEdges,removeVxs = 
           (([],[],[]),matchedArgs)
-          ||> List.fold (fun (addAcc,remAcc,remVx) (ph,arg) ->
-            let argId = if arg.Owner <> null then arg.Owner.Uid else arg.Uid
-            let addE = {VarEdge.Default with From=argId; To=phOwnerMap.[ph].Uid; IsRemapped=true; ToPlaceholder=true; Var=arg}
-            let remEs = [ (argId, g.Container); (ph.Uid, phOwnerMap.[ph].Uid); ]
-            (addE::addAcc), (remEs::remAcc), (ph::remVx)
+          ||> List.fold (fun (addAcc,remAcc,remVxAcc) (ph,arg) ->
+
+            let phOwnerId = phOwnerMap.[ph].Uid
+
+            let hasE,e =  graph.RemappedOutEdges.TryGetValue ((arg.Uid, g.Container))
+
+            let addE,remEs,remVx =
+              if hasE then
+                (
+                  {e with To=phOwnerId; ToPlaceholder=true},            //re-link incoming edge to owner of placeholder as new edge
+                  [(e.From,e.To); (ph.Uid,phOwnerId) ],                 //remove incoming edge
+                  ph                                                    //remove placeholder vertex
+                )
+              else
+                let argId = if arg.Owner <> null then arg.Owner.Uid else arg.Uid
+                (
+                  {VarEdge.Default with From=argId; To=phOwnerId; IsRemapped=true; ToPlaceholder=true; Var=arg},
+                  [ (argId, g.Container); (ph.Uid, phOwnerId); ],
+                  ph
+                )
+
+            (addE::addAcc), (remEs::remAcc), (remVx::remVxAcc)
           )
 
-        let removedPh = HashSet removeNodes
+        let removedPh = HashSet removeVxs
         let removeEdges = List.collect (fun x->x) removeEdges |> set
 
         let g = 
           { g with 
               Vertices = g.Vertices |> List.filter (function Vv v when v.IsPlaceholder -> removedPh.Contains v |> not | _ -> true)
-              Edges = g.Edges |> List.filter (toFrm>>removeEdges.Contains>>not)
+              Edges = g.Edges |> List.filter (frmTo>>removeEdges.Contains>>not)
           }
 
         addEdges, removeEdges, g
@@ -289,7 +317,7 @@ module ModelGraph =
       (([],Set.empty,[]),remapped) 
       ||> List.fold (fun (aE,rE,gs) (e,r,g)-> aE @ e, Set.union rE r, List.append gs [g])
 
-    let es = graph.Edges |> List.filter (toFrm>>removeEdges.Contains>>not)
+    let es = graph.Edges |> List.filter (frmTo>>removeEdges.Contains>>not)
     let es = es @ addEdges
 
     {graph with Edges=es; Subgraphs=subgraphs}
@@ -333,7 +361,6 @@ module ModelGraph =
     {graph with Edges=es; Subgraphs=subgraphs}
 
   let relinkBlockOutputs (graph:Graph) =
-  //(((vxs,es),subgraphs) as graphs) = 
     let sgIds = graph.Subgraphs |> List.map (fun g->g.Container) |> set
 
     let blkOutputMap = 
@@ -347,29 +374,32 @@ module ModelGraph =
           |> Seq.toList //assume block outputs correspond to block root outputs, by order
         | _ -> []) 
 
-    let esMap = (Dictionary<_,_>(),graph.Edges) ||> List.fold (fun acc (e:VarEdge) -> mCollectH acc e.Var e)
+    let varUsedInEdges = (Dictionary<_,_>(),graph.Edges) ||> List.fold (fun acc (e:VarEdge) -> mCollectH acc e.Var e)
 
-    let removeList,remapList = 
-      (([],[]),blkOutputMap) 
-      ||> List.fold (fun (accRemove,accRemap) (blkOutVar,rootFnOutVar,blockRootFn) ->
-        let blkOutEs = esMap.[blkOutVar]
+    let removeList,addList,replaceList = 
+      (([],[],[]),blkOutputMap) 
+      ||> List.fold (fun (accRemove,accAdd,accReplace) (blkOutVar,rootFnOutVar,blockRootFn) ->
+        let blkOutEs = varUsedInEdges.[blkOutVar]
         let remapped = blkOutEs |> List.map (fun e -> 
           {e with From=blockRootFn.Uid; Var=rootFnOutVar; IsRemapped=true})
-        let toremove = blkOutEs::accRemove
         blkOutEs::accRemove,
-        remapped::accRemap)
+        remapped::accAdd,
+        accReplace @ List.zip blkOutEs remapped)
 
     let toRemove = removeList |> List.collect (fun es -> es |> List.map (fun e->e.From,e.To)) |> set
     let es = graph.Edges |> List.filter (fun e -> toRemove.Contains(e.From,e.To) |> not)
-    let es = es @ (remapList |> List.collect (fun es->es))
+    let es = es @ (addList |> List.collect (fun es->es))
 
     let sgVxsToRemove = blkOutputMap |> Seq.map(fun (_,v,_) ->v.Uid) |> set
+
+    //out edges remapped - keep old around for remapping input
+    let replaceMap = replaceList |> List.map (fun (oldE,newE) -> (oldE.Var.Uid,oldE.To),newE) |> dict 
 
     let subgraphs = graph.Subgraphs |> List.map (fun sg -> 
       {sg with
         Vertices = sg.Vertices |> List.filter (uid graph.Named >> sgVxsToRemove.Contains >> not) 
         Edges=sg.Edges |> List.filter (fun e->sgVxsToRemove.Contains e.To |> not)})
-    {graph with Edges=es; Subgraphs=subgraphs}
+    {graph with Edges=es; Subgraphs=subgraphs; RemappedOutEdges=replaceMap}
 
 
   ///List block operations and their unique ids in the given function.
@@ -436,7 +466,7 @@ module ModelViz =
     if v.IsConstant then
       ""
     else
-      let toPh = if e.ToPlaceholder then " -> [placeholder??]" else ""
+      let toPh = if e.ToPlaceholder then " -> [??placeholder??]" else ""
       sprintf "%s %s\r\n%A" v.Uid toPh  (v.Shape.Dimensions |> Seq.toList)
 
   let opNameMap =
@@ -492,6 +522,7 @@ module ModelViz =
       let tE = e.UserData :?> VarEdge
       e.LabelText <- edgeLabel tE
       if tE.IsRemapped then e.Attr.AddStyle Style.Dotted
+      if tE.ToPlaceholder then e.Attr.Color <- Color.IndianRed
 
   //simple graph (no subgraphs)
   let makeGraph graph =

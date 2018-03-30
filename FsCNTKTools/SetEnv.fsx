@@ -13,12 +13,12 @@ let fullPath paths = Path.GetFullPath(Path.Combine(paths))
 
 //change these for you installation (e.g. GPU vs CPU)
 let dependencies = [
-      @"CNTK.Deps.Cuda.2.4.0\support\x64\Dependency"
-      @"CNTK.Deps.cuDNN.2.4.0\support\x64\Dependency"
-      @"CNTK.Deps.MKL.2.4.0\support\x64\Dependency"
-      @"CNTK.Deps.OpenCV.Zip.2.4.0\support\x64\Dependency"
-      @"CNTK.Deps.OpenCV.Zip.2.4.0\support\x64\Dependency\Release"
-      @"CNTK.GPU.2.4.0\support\x64\Release"
+      @"CNTK.Deps.Cuda.2.5.0\support\x64\Dependency"
+      @"CNTK.Deps.cuDNN.2.5.0\support\x64\Dependency"
+      @"CNTK.Deps.MKL.2.5.0\support\x64\Dependency"
+      @"CNTK.Deps.OpenCV.Zip.2.5.0\support\x64\Dependency"
+      @"CNTK.Deps.OpenCV.Zip.2.5.0\support\x64\Dependency\Release"
+      @"CNTK.GPU.2.5.0\support\x64\Release"
     ]
 
 dependencies 
@@ -27,7 +27,7 @@ dependencies
         fullPath [|pkgdir;dep|] + ";" + Environment.GetEnvironmentVariable("Path"))
     )    
 
-#r @"..\packages\CNTK.GPU.2.4.0\lib\net45\x64\Cntk.Core.Managed-2.4.dll"
+#r @"..\packages\CNTK.GPU.2.5.0\lib\net45\x64\Cntk.Core.Managed-2.5.dll"
 
 //#r @"D:\Repos\automatic-graph-layout\GraphLayout\tools\WpfGraphControl\bin\Debug\Microsoft.Msagl.dll"
 #r @"..\packages\Microsoft.Msagl.1.0.2\lib\net40\Microsoft.Msagl.dll"
