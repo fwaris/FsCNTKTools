@@ -1,4 +1,4 @@
-﻿#load "SetEnv.fsx"
+﻿#load "FsCNTKTools_SetEnv.fsx"
 
 open CNTK
 open FsCNTK.Tools
@@ -16,11 +16,11 @@ let model_t2 = Function.Load(t2,device)
 FsCNTK.Tools.ModelViz.showGraph AllBlocks model_t2
 
 let testMuch() =
-  let fld = @"D:\repodata\fscntk"
+  let fld = @"C:\s\repodata\fscntk\s2s"
   let mdlFls = System.IO.Directory.EnumerateFiles(fld,"*.bin") |> Seq.toArray
   for f in mdlFls do
     printfn "testing %s" f
     let model = Function.Load(f,device)
     let graphs =
-      ModelGraph.computationGraphs FsCNTK.Tools.AllBlocks model 
-    ModelViz.visualize graphs
+      ModelGraph.computationGraphs FsCNTK.Tools.NoExpansion model 
+    ModelViz.visualize f graphs

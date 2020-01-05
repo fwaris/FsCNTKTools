@@ -1,4 +1,4 @@
-﻿#load "SetEnv.fsx"
+﻿#load "FsCNTKTools_SetEnv.fsx"
 //script to test that environment is set up correctly
 
 open CNTK

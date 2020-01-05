@@ -589,7 +589,7 @@ module ModelViz =
     g
   
   ///visualize a graph given vertices, edges and subgraphs
-  let visualize graph =
+  let visualize title graph =
     let gv = new Microsoft.Msagl.GraphViewerGdi.GViewer()
     let g = 
       if List.isEmpty graph.Subgraphs then
@@ -599,6 +599,7 @@ module ModelViz =
     g.Edges |> Seq.iter (fun e->  if e.Label<> null then e.Label.FontSize <- 8.0)
     gv.Graph <- g
     let f = new System.Windows.Forms.Form()
+    f.Text <- title
     f.SuspendLayout()
     gv.Dock <- System.Windows.Forms.DockStyle.Fill
     f.Controls.Add(gv)
@@ -608,4 +609,5 @@ module ModelViz =
     f.Show()
   
   ///construct and show the function graph
-  let showGraph expand f = ((computationGraphs expand) >> visualize) f
+  let showGraph expand (f:Function) = ((computationGraphs expand) >> (visualize f.Name)) f
+  let showGraphT title expand (f:Function) = ((computationGraphs expand) >> (visualize title)) f
