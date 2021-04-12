@@ -1,4 +1,4 @@
-﻿namespace FsCNTKTools
+﻿namespace FsCNTK.Tools
 open CNTK
 open System
 type C = CNTK.CNTKLib

@@ -1,9 +1,9 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.27130.2036
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.30021.99
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FsCNTKTools", "FsCNTKTools\FsCNTKTools.fsproj", "{3C8E3F9F-E952-412B-8159-AF03F90307B7}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FsCNTKTools", "FsCNTKTools\FsCNTKTools.fsproj", "{FD42876D-910E-466D-A0DC-CEFE2CD0E23A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -11,10 +11,10 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{3C8E3F9F-E952-412B-8159-AF03F90307B7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{3C8E3F9F-E952-412B-8159-AF03F90307B7}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{3C8E3F9F-E952-412B-8159-AF03F90307B7}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{3C8E3F9F-E952-412B-8159-AF03F90307B7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FD42876D-910E-466D-A0DC-CEFE2CD0E23A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FD42876D-910E-466D-A0DC-CEFE2CD0E23A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FD42876D-910E-466D-A0DC-CEFE2CD0E23A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FD42876D-910E-466D-A0DC-CEFE2CD0E23A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

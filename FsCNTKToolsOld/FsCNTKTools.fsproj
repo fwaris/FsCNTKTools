@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>3c8e3f9f-e952-412b-8159-af03f90307b7</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>FsCNTKTools</RootNamespace>
+    <AssemblyName>FsCNTKTools</AssemblyName>
+    <UseStandardResourceNames>true</UseStandardResourceNames>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <TargetFSharpCoreVersion>4.4.1.0</TargetFSharpCoreVersion>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <Name>FsCNTKTools</Name>
+    <NuGetPackageImportStamp>
+    </NuGetPackageImportStamp>
+    <TargetFrameworkProfile />
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <Tailcalls>false</Tailcalls>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <WarningLevel>3</WarningLevel>
+    <DocumentationFile>bin\$(Configuration)\$(AssemblyName).XML</DocumentationFile>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <Tailcalls>true</Tailcalls>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <WarningLevel>3</WarningLevel>
+    <DocumentationFile>bin\$(Configuration)\$(AssemblyName).XML</DocumentationFile>
+  </PropertyGroup>
+  <PropertyGroup>
+    <MinimumVisualStudioVersion Condition="'$(MinimumVisualStudioVersion)' == ''">11</MinimumVisualStudioVersion>
+  </PropertyGroup>
+  <Choose>
+    <When Condition="'$(VisualStudioVersion)' == '11.0'">
+      <PropertyGroup Condition=" '$(FSharpTargetsPath)' == '' AND Exists('$(MSBuildExtensionsPath32)\..\Microsoft SDKs\F#\3.0\Framework\v4.0\Microsoft.FSharp.Targets') ">
+        <FSharpTargetsPath>$(MSBuildExtensionsPath32)\..\Microsoft SDKs\F#\3.0\Framework\v4.0\Microsoft.FSharp.Targets</FSharpTargetsPath>
+      </PropertyGroup>
+    </When>
+    <Otherwise>
+      <PropertyGroup Condition=" '$(FSharpTargetsPath)' == '' AND Exists('$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\FSharp\Microsoft.FSharp.Targets') ">
+        <FSharpTargetsPath>$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\FSharp\Microsoft.FSharp.Targets</FSharpTargetsPath>
+      </PropertyGroup>
+    </Otherwise>
+  </Choose>
+  <Import Project="$(FSharpTargetsPath)" />
+  <ItemGroup>
+    <Compile Include="AssemblyInfo.fs" />
+    <Compile Include="Graph.fs" />
+    <None Include="FsCNTKTools_SetEnv.fsx" />
+    <None Include="TestEnv.fsx" />
+    <None Include="test_model.bin" />
+    <None Include="test_model.bin.png" />
+    <None Include="Scratch.fsx" />
+    <Content Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="Cntk.Core.Managed-2.7">
+      <HintPath>..\packages\CNTK.GPU.2.7.0\lib\netstandard2.0\Cntk.Core.Managed-2.7.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Msagl">
+      <HintPath>..\packages\Microsoft.Msagl.1.1.3\lib\net40\Microsoft.Msagl.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Msagl" />
+    <Reference Include="Microsoft.Msagl.Drawing">
+      <HintPath>..\packages\Microsoft.Msagl.Drawing.1.1.3\lib\net40\Microsoft.Msagl.Drawing.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Msagl.Drawing" />
+    <Reference Include="Microsoft.Msagl.GraphViewerGdi">
+      <HintPath>..\packages\Microsoft.Msagl.GraphViewerGDI.1.1.3\lib\net40\Microsoft.Msagl.GraphViewerGdi.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Msagl.GraphViewerGdi" />
+    <Reference Include="Microsoft.Msagl.WpfGraphControl">
+      <HintPath>..\..\automatic-graph-layout\GraphLayout\tools\WpfGraphControl\bin\Debug\Microsoft.Msagl.WpfGraphControl.dll</HintPath>
+    </Reference>
+    <Reference Include="mscorlib" />
+    <Reference Include="FSharp.Core">
+      <Name>FSharp.Core</Name>
+      <AssemblyName>FSharp.Core.dll</AssemblyName>
+      <HintPath>$(MSBuildProgramFiles32)\Reference Assemblies\Microsoft\FSharp\.NETFramework\v4.0\$(TargetFSharpCoreVersion)\FSharp.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="mscorlib" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="System" />
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Numerics" />
+    <Reference Include="System.ValueTuple">
+      <HintPath>..\packages\System.ValueTuple.4.5.0\lib\net461\System.ValueTuple.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.ValueTuple" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="WindowsBase" />
+  </ItemGroup>
+  <Import Project="..\packages\CNTK.Deps.Cuda.2.7.0\build\netstandard2.0\CNTK.Deps.Cuda.targets" Condition="Exists('..\packages\CNTK.Deps.Cuda.2.7.0\build\netstandard2.0\CNTK.Deps.Cuda.targets')" />
+  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
+    <PropertyGroup>
+      <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
+    </PropertyGroup>
+    <Error Condition="!Exists('..\packages\CNTK.Deps.Cuda.2.7.0\build\netstandard2.0\CNTK.Deps.Cuda.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\CNTK.Deps.Cuda.2.7.0\build\netstandard2.0\CNTK.Deps.Cuda.targets'))" />
+    <Error Condition="!Exists('..\packages\CNTK.Deps.cuDNN.2.7.0\build\netstandard2.0\CNTK.Deps.cuDNN.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\CNTK.Deps.cuDNN.2.7.0\build\netstandard2.0\CNTK.Deps.cuDNN.targets'))" />
+    <Error Condition="!Exists('..\packages\CNTK.Deps.MKL.2.7.0\build\netstandard2.0\CNTK.Deps.MKL.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\CNTK.Deps.MKL.2.7.0\build\netstandard2.0\CNTK.Deps.MKL.targets'))" />
+    <Error Condition="!Exists('..\packages\CNTK.Deps.OpenCV.Zip.2.7.0\build\netstandard2.0\CNTK.Deps.OpenCV.Zip.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\CNTK.Deps.OpenCV.Zip.2.7.0\build\netstandard2.0\CNTK.Deps.OpenCV.Zip.targets'))" />
+    <Error Condition="!Exists('..\packages\CNTK.GPU.2.7.0\build\netstandard2.0\CNTK.GPU.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\CNTK.GPU.2.7.0\build\netstandard2.0\CNTK.GPU.targets'))" />
+  </Target>
+  <Import Project="..\packages\CNTK.Deps.cuDNN.2.7.0\build\netstandard2.0\CNTK.Deps.cuDNN.targets" Condition="Exists('..\packages\CNTK.Deps.cuDNN.2.7.0\build\netstandard2.0\CNTK.Deps.cuDNN.targets')" />
+  <Import Project="..\packages\CNTK.Deps.MKL.2.7.0\build\netstandard2.0\CNTK.Deps.MKL.targets" Condition="Exists('..\packages\CNTK.Deps.MKL.2.7.0\build\netstandard2.0\CNTK.Deps.MKL.targets')" />
+  <Import Project="..\packages\CNTK.Deps.OpenCV.Zip.2.7.0\build\netstandard2.0\CNTK.Deps.OpenCV.Zip.targets" Condition="Exists('..\packages\CNTK.Deps.OpenCV.Zip.2.7.0\build\netstandard2.0\CNTK.Deps.OpenCV.Zip.targets')" />
+  <Import Project="..\packages\CNTK.GPU.2.7.0\build\netstandard2.0\CNTK.GPU.targets" Condition="Exists('..\packages\CNTK.GPU.2.7.0\build\netstandard2.0\CNTK.GPU.targets')" />
+  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+       Other similar extension points exist, see Microsoft.Common.targets.
+  <Target Name="BeforeBuild">
+  </Target>
+  <Target Name="AfterBuild">
+  </Target>
+  -->
+</Project>
